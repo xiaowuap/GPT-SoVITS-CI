@@ -102,6 +102,9 @@ import os
 import sys
 import traceback
 from typing import Generator
+import pymysql
+import datetime
+from fastapi import Request
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -130,12 +133,82 @@ parser = argparse.ArgumentParser(description="GPT-SoVITS api")
 parser.add_argument("-c", "--tts_config", type=str, default="GPT_SoVITS/configs/tts_infer.yaml", help="tts_infer路径")
 parser.add_argument("-a", "--bind_addr", type=str, default="127.0.0.1", help="default: 127.0.0.1")
 parser.add_argument("-p", "--port", type=int, default="9880", help="default: 9880")
+parser.add_argument("-n", "--model_name", type=str, default="default", help="当前TTS模型名称")
+parser.add_argument("-db", "--db_config", type=str, default="mysql://user:password@localhost/gpt_sovits", 
+                   help="MySQL数据库连接字符串，格式: mysql://user:password@host/dbname")
 args = parser.parse_args()
 config_path = args.tts_config
 # device = args.device
 port = args.port
 host = args.bind_addr
+model_name = args.model_name
+db_config = args.db_config
 argv = sys.argv
+
+# 解析数据库连接字符串
+def parse_db_url(db_url):
+    if not db_url.startswith("mysql://"):
+        return None
+    
+    db_url = db_url.replace("mysql://", "")
+    auth, rest = db_url.split("@", 1)
+    user_pass = auth.split(":", 1)
+    user = user_pass[0]
+    password = user_pass[1] if len(user_pass) > 1 else ""
+    
+    host_db = rest.split("/", 1)
+    host = host_db[0]
+    dbname = host_db[1] if len(host_db) > 1 else ""
+    
+    return {
+        "user": user,
+        "password": password,
+        "host": host,
+        "database": dbname
+    }
+
+# 数据库连接参数
+db_params = parse_db_url(db_config)
+
+# 数据库记录函数
+def record_tts_request(text, client_ip):
+    if not db_params:
+        print("数据库配置无效，跳过记录")
+        return
+    
+    try:
+        conn = pymysql.connect(
+            host=db_params["host"],
+            user=db_params["user"],
+            password=db_params["password"],
+            database=db_params["database"]
+        )
+        
+        with conn.cursor() as cursor:
+            # 确保表存在
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tts_requests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                text TEXT NOT NULL,
+                client_ip VARCHAR(45) NOT NULL,
+                model_name VARCHAR(255) NOT NULL,
+                request_time DATETIME NOT NULL
+            )
+            """)
+            
+            # 插入记录
+            now = datetime.datetime.now()
+            cursor.execute(
+                "INSERT INTO tts_requests (text, client_ip, model_name, request_time) VALUES (%s, %s, %s, %s)",
+                (text, client_ip, model_name, now)
+            )
+            
+            conn.commit()
+        
+        conn.close()
+        print(f"已记录TTS请求: {text[:30]}...")
+    except Exception as e:
+        print(f"记录TTS请求失败: {str(e)}")
 
 if config_path in [None, ""]:
     config_path = "GPT-SoVITS/configs/tts_infer.yaml"
@@ -297,7 +370,7 @@ def check_params(req: dict):
     return None
 
 
-async def tts_handle(req: dict):
+async def tts_handle(req: dict, request: Request = None):
     """
     Text to speech handler.
 
@@ -309,7 +382,7 @@ async def tts_handle(req: dict):
                 "ref_audio_path": "",         # str.(required) reference audio path
                 "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker synthesis
                 "prompt_text": "",            # str.(optional) prompt text for the reference audio
-                "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
+                "prompt_lang: "",             # str.(required) language of the prompt text for the reference audio
                 "top_k": 5,                   # int. top k sampling
                 "top_p": 1,                   # float. top p sampling
                 "temperature": 1,             # float. temperature for sampling
@@ -330,6 +403,18 @@ async def tts_handle(req: dict):
     returns:
         StreamingResponse: audio stream response.
     """
+    # 获取客户端IP
+    client_ip = "unknown"
+    if request:
+        client_ip = request.client.host
+        # 如果是通过代理，尝试获取原始IP
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+    
+    # 记录请求到数据库
+    text = req.get("text", "")
+    record_tts_request(text, client_ip)
 
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
@@ -375,13 +460,12 @@ async def tts_handle(req: dict):
 
 @APP.get("/control")
 async def control(command: str = None):
-    if command is None:
-        return JSONResponse(status_code=400, content={"message": "command is required"})
-    handle_control(command)
+    return JSONResponse(status_code=403, content={"message": "此功能已被禁用"})
 
 
 @APP.get("/tts")
 async def tts_get_endpoint(
+    request: Request,
     text: str = None,
     text_lang: str = None,
     ref_audio_path: str = None,
@@ -403,7 +487,7 @@ async def tts_get_endpoint(
     parallel_infer: bool = True,
     repetition_penalty: float = 1.35,
     sample_steps: int = 32,
-    super_sampling: bool = False,
+    super_sampling: bool = False
 ):
     req = {
         "text": text,
@@ -429,64 +513,28 @@ async def tts_get_endpoint(
         "sample_steps": int(sample_steps),
         "super_sampling": super_sampling,
     }
-    return await tts_handle(req)
+    return await tts_handle(req, request)
 
 
 @APP.post("/tts")
-async def tts_post_endpoint(request: TTS_Request):
-    req = request.dict()
-    return await tts_handle(req)
+async def tts_post_endpoint(request: TTS_Request, req: Request):
+    req_dict = request.dict()
+    return await tts_handle(req_dict, req)
 
 
 @APP.get("/set_refer_audio")
 async def set_refer_aduio(refer_audio_path: str = None):
-    try:
-        tts_pipeline.set_ref_audio(refer_audio_path)
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"message": "set refer audio failed", "Exception": str(e)})
-    return JSONResponse(status_code=200, content={"message": "success"})
-
-
-# @APP.post("/set_refer_audio")
-# async def set_refer_aduio_post(audio_file: UploadFile = File(...)):
-#     try:
-#         # 检查文件类型，确保是音频文件
-#         if not audio_file.content_type.startswith("audio/"):
-#             return JSONResponse(status_code=400, content={"message": "file type is not supported"})
-
-#         os.makedirs("uploaded_audio", exist_ok=True)
-#         save_path = os.path.join("uploaded_audio", audio_file.filename)
-#         # 保存音频文件到服务器上的一个目录
-#         with open(save_path , "wb") as buffer:
-#             buffer.write(await audio_file.read())
-
-#         tts_pipeline.set_ref_audio(save_path)
-#     except Exception as e:
-#         return JSONResponse(status_code=400, content={"message": f"set refer audio failed", "Exception": str(e)})
-#     return JSONResponse(status_code=200, content={"message": "success"})
+    return JSONResponse(status_code=403, content={"message": "此功能已被禁用"})
 
 
 @APP.get("/set_gpt_weights")
 async def set_gpt_weights(weights_path: str = None):
-    try:
-        if weights_path in ["", None]:
-            return JSONResponse(status_code=400, content={"message": "gpt weight path is required"})
-        tts_pipeline.init_t2s_weights(weights_path)
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"message": "change gpt weight failed", "Exception": str(e)})
-
-    return JSONResponse(status_code=200, content={"message": "success"})
+    return JSONResponse(status_code=403, content={"message": "此功能已被禁用"})
 
 
 @APP.get("/set_sovits_weights")
 async def set_sovits_weights(weights_path: str = None):
-    try:
-        if weights_path in ["", None]:
-            return JSONResponse(status_code=400, content={"message": "sovits weight path is required"})
-        tts_pipeline.init_vits_weights(weights_path)
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"message": "change sovits weight failed", "Exception": str(e)})
-    return JSONResponse(status_code=200, content={"message": "success"})
+    return JSONResponse(status_code=403, content={"message": "此功能已被禁用"})
 
 
 if __name__ == "__main__":
