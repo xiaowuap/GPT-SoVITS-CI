@@ -96,6 +96,19 @@ RESP:
 成功: 返回"success", http code 200
 失败: 返回包含错误信息的 json, http code 400
 
+### HealthCheck
+
+endpoint: `/alive`
+
+GET:
+```
+http://127.0.0.1:9880/alive
+```
+
+RESP:
+成功: 返回"success", http code 200
+
+
 """
 
 import os
@@ -536,6 +549,9 @@ async def set_gpt_weights(weights_path: str = None):
 async def set_sovits_weights(weights_path: str = None):
     return JSONResponse(status_code=403, content={"message": "此功能已被禁用"})
 
+@APP.get("/alive")
+async def alive():
+    return Response(status_code=200, content="success")
 
 if __name__ == "__main__":
     try:
