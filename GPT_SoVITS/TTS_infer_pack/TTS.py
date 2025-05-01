@@ -254,10 +254,31 @@ class TTS_Config:
             configs: dict = self._load_configs(self.configs_path)
 
         assert isinstance(configs, dict)
-        version = configs.get("version", "v2").lower()
-        assert version in ["v1", "v2", "v3"]
-        self.default_configs[version] = configs.get(version, self.default_configs[version])
-        self.configs: dict = configs.get("custom", deepcopy(self.default_configs[version]))
+
+        # 尝试首先加载 'custom' 部分
+        custom_configs = configs.get("custom")
+        if isinstance(custom_configs, dict):
+            print(f"Loading configuration from 'custom' section in {self.configs_path}")
+            self.configs = deepcopy(custom_configs)
+            # 从 custom 配置或默认为 v2 确定版本
+            version = self.configs.get("version", "v2").lower()
+            assert version in ["v1", "v2", "v3"], f"Invalid version '{version}' in custom config."
+            self.version = version # 设置版本属性
+            # 基于文件更新此版本的默认配置，以便在 custom 中缺少路径时进行回退
+            self.default_configs[version] = configs.get(version, self.default_configs[version])
+        else:
+            # 如果 'custom' 部分不存在或不是字典，则基于版本加载
+            print(f"No 'custom' section found or invalid in {self.configs_path}. Loading based on version.")
+            version = configs.get("version", "v2").lower()
+            assert version in ["v1", "v2", "v3"], f"Invalid version '{version}' in config."
+            self.version = version # 设置版本属性
+            # 基于文件更新此版本的默认配置
+            self.default_configs[version] = configs.get(version, self.default_configs[version])
+            # 使用特定版本的配置作为主配置
+            self.configs = deepcopy(self.default_configs[version])
+
+        # 现在 self.configs 保存了优先的配置（custom 或特定版本）
+        # 并且 self.version 已正确设置。
 
         self.device = self.configs.get("device", torch.device("cpu"))
         if "cuda" in str(self.device) and not torch.cuda.is_available():

@@ -194,19 +194,20 @@ def record_tts_request(text, client_ip):
             host=db_params["host"],
             user=db_params["user"],
             password=db_params["password"],
-            database=db_params["database"]
+            database=db_params["database"],
+            charset='utf8mb4'  # 明确指定UTF-8编码
         )
         
         with conn.cursor() as cursor:
-            # 确保表存在
+            # 确保表存在，并使用utf8mb4字符集
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS tts_requests (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                text TEXT NOT NULL,
+                text TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
                 client_ip VARCHAR(45) NOT NULL,
                 model_name VARCHAR(255) NOT NULL,
                 request_time DATETIME NOT NULL
-            )
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """)
             
             # 插入记录
