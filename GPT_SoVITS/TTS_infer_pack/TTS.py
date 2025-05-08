@@ -692,9 +692,11 @@ class TTS:
                 zero_wav_torch = zero_wav_torch.half()
 
             wav16k = torch.cat([wav16k, zero_wav_torch])
-            hubert_feature = self.cnhuhbert_model.model(wav16k.unsqueeze(0))["last_hidden_state"].transpose(
-                1, 2
-            )  # .float()
+
+            # 统一自动转换，与模型一致
+            wav16k = wav16k.to(self.cnhuhbert_model.model.dtype)
+
+            hubert_feature = self.cnhuhbert_model.model(wav16k.unsqueeze(0))["last_hidden_state"].transpose(1, 2)
             codes = self.vits_model.extract_latent(hubert_feature)
 
             prompt_semantic = codes[0, 0].to(self.configs.device)
