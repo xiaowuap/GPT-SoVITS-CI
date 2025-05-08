@@ -1,12 +1,15 @@
 """
 # WebAPI文档
 
-` python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml `
+` python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml -n default -db mysql://user:pass@host/dbname `
 
 ## 执行参数:
-    `-a` - `绑定地址, 默认"127.0.0.1"`
-    `-p` - `绑定端口, 默认9880`
-    `-c` - `TTS配置文件路径, 默认"GPT_SoVITS/configs/tts_infer.yaml"`
+    `-a`  - 绑定地址, 默认 "127.0.0.1"
+    `-p`  - 绑定端口, 默认 9880
+    `-c`  - TTS 配置文件路径, 默认 "GPT_SoVITS/configs/tts_infer.yaml"
+    `-n`  - 当前 TTS 模型名称, 默认 "default"
+    `-db` - MySQL 数据库连接字符串, 格式 mysql://user:password@host/dbname，默认 "mysql://user:password@localhost/gpt_sovits"
+
 
 ## 调用:
 
