@@ -347,16 +347,26 @@ def record_tts_request(text, client_ip):
         )
         
         with conn.cursor() as cursor:
-            # 确保表存在，并使用utf8mb4字符集
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tts_requests (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                text TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
-                client_ip VARCHAR(45) NOT NULL,
-                model_name VARCHAR(255) NOT NULL,
-                request_time DATETIME NOT NULL
-            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-            """)
+            # 检查并修改数据库字符集
+            cursor.execute("ALTER DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" % db_params["database"])
+            
+            # 检查表是否存在
+            cursor.execute("SHOW TABLES LIKE 'tts_requests'")
+            if cursor.fetchone():
+                # 表存在，修改表的字符集
+                cursor.execute("ALTER TABLE tts_requests CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+                cursor.execute("ALTER TABLE tts_requests MODIFY text TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+            else:
+                # 创建表
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tts_requests (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    text TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+                    client_ip VARCHAR(45) NOT NULL,
+                    model_name VARCHAR(255) NOT NULL,
+                    request_time DATETIME NOT NULL
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                """)
             
             # 插入记录
             now = datetime.datetime.now()
