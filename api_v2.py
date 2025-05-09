@@ -7,7 +7,7 @@
     `-a`  - 绑定地址, 默认 "127.0.0.1"
     `-p`  - 绑定端口, 默认 9880
     `-c`  - TTS 配置文件路径, 默认 "GPT_SoVITS/configs/tts_infer.yaml"
-    `-n`  - 当前 TTS 模型名称, 默认 "default"
+    `-n`  - 当前 TTS 模型名称, 默认为当前文件夹名称
     `-db` - MySQL 数据库连接字符串, 格式 mysql://user:password@host/dbname，默认 "mysql://user:password@localhost/gpt_sovits"
 
 
@@ -121,6 +121,8 @@ from typing import Generator
 import pymysql
 import datetime
 from fastapi import Request
+import yaml
+import glob
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -145,11 +147,145 @@ from pydantic import BaseModel
 i18n = I18nAuto()
 cut_method_names = get_cut_method_names()
 
+# 获取当前文件夹名称作为默认的模型名称
+current_folder_name = os.path.basename(os.getcwd())
+
+# 自动更新配置文件中的模型路径
+def update_model_paths_in_config(config_path, model_name):
+    if not os.path.exists(config_path):
+        print(f"配置文件 {config_path} 不存在，将创建默认配置")
+        # 让 TTS_Config 稍后自动创建默认配置
+        return False
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as file:
+            config = yaml.safe_load(file)
+        
+        if config is None:
+            config = {}
+            
+        # 检查配置文件中是否有custom节点
+        if 'custom' not in config:
+            config['custom'] = {}
+            # 如果没有custom节点，尝试复制default配置
+            if 'default' in config:
+                config['custom'] = config['default'].copy()
+        
+        # 保存原始版本信息
+        original_version = config['custom'].get('version', 'v1')
+        
+        # 查找可能的模型文件
+        model_dir = "GPT_SoVITS/pretrained_models"
+        
+        # 搜索模式，从特定到通用
+        t2s_patterns = [
+            f"{model_name}.ckpt",
+            f"{model_name}_*.ckpt",
+            f"{model_name}*.ckpt",
+            f"*{model_name}*.ckpt",
+            f"s1*{model_name}*.ckpt"
+        ]
+        
+        sovits_patterns = [
+            f"{model_name}.pth",
+            f"{model_name}_*.pth",
+            f"{model_name}*.pth",
+            f"*{model_name}*.pth",
+            f"s2*{model_name}*.pth"
+        ]
+        
+        # 优先检查专用模型目录，然后再检查其他目录
+        t2s_search_dirs = [
+            os.path.join(now_dir, "GPT_weights_v2"),
+            now_dir,
+            os.path.join(now_dir, model_dir)
+        ]
+        
+        sovits_search_dirs = [
+            os.path.join(now_dir, "SoVITS_weights_v2"),
+            now_dir, 
+            os.path.join(now_dir, model_dir)
+        ]
+        
+        t2s_path = None
+        sovits_path = None
+        
+        # 搜索T2S模型文件
+        for directory in t2s_search_dirs:
+            if os.path.exists(directory):
+                for pattern in t2s_patterns:
+                    matches = glob.glob(os.path.join(directory, pattern))
+                    if matches:
+                        t2s_path = matches[0]
+                        # 转换为相对路径
+                        if t2s_path.startswith(now_dir):
+                            t2s_path = os.path.relpath(t2s_path, now_dir)
+                        print(f"在 {directory} 目录中找到T2S模型: {t2s_path}")
+                        break
+            if t2s_path:
+                break
+                
+        # 搜索SoVITS模型文件
+        for directory in sovits_search_dirs:
+            if os.path.exists(directory):
+                for pattern in sovits_patterns:
+                    matches = glob.glob(os.path.join(directory, pattern))
+                    if matches:
+                        sovits_path = matches[0]
+                        # 转换为相对路径
+                        if sovits_path.startswith(now_dir):
+                            sovits_path = os.path.relpath(sovits_path, now_dir)
+                        print(f"在 {directory} 目录中找到SoVITS模型: {sovits_path}")
+                        break
+            if sovits_path:
+                break
+        
+        # 自动检测模型版本
+        detected_version = original_version
+        if sovits_path:
+            # 使用简单的启发式方法检测模型版本
+            if "v3" in sovits_path.lower():
+                detected_version = "v3"
+            elif "v2" in sovits_path.lower():
+                detected_version = "v2"
+            elif "G488" in sovits_path:  # 默认模型标志
+                detected_version = "v1"
+        
+        # 如果找到对应的模型文件，更新配置
+        updated = False
+        if t2s_path:
+            config['custom']['t2s_weights_path'] = t2s_path
+            print(f"已自动设置T2S模型路径: {t2s_path}")
+            updated = True
+        
+        if sovits_path:
+            config['custom']['vits_weights_path'] = sovits_path
+            print(f"已自动设置SoVITS模型路径: {sovits_path}")
+            updated = True
+        
+        # 更新版本信息
+        if detected_version != original_version:
+            config['custom']['version'] = detected_version
+            print(f"已自动更新模型版本: {detected_version}")
+            updated = True
+        
+        # 保存更新后的配置
+        if updated:
+            with open(config_path, 'w', encoding='utf-8') as file:
+                yaml.dump(config, file, allow_unicode=True)
+            return True
+        
+        return False
+    except Exception as e:
+        print(f"更新配置文件失败: {str(e)}")
+        traceback.print_exc()
+        return False
+
 parser = argparse.ArgumentParser(description="GPT-SoVITS api")
 parser.add_argument("-c", "--tts_config", type=str, default="GPT_SoVITS/configs/tts_infer.yaml", help="tts_infer路径")
 parser.add_argument("-a", "--bind_addr", type=str, default="127.0.0.1", help="default: 127.0.0.1")
 parser.add_argument("-p", "--port", type=int, default="9880", help="default: 9880")
-parser.add_argument("-n", "--model_name", type=str, default="default", help="当前TTS模型名称")
+parser.add_argument("-n", "--model_name", type=str, default=current_folder_name, help="当前TTS模型名称，默认为当前文件夹名称")
 parser.add_argument("-db", "--db_config", type=str, default="mysql://user:password@localhost/gpt_sovits", 
                    help="MySQL数据库连接字符串，格式: mysql://user:password@host/dbname")
 args = parser.parse_args()
@@ -160,6 +296,15 @@ host = args.bind_addr
 model_name = args.model_name
 db_config = args.db_config
 argv = sys.argv
+
+# 在加载TTS模型前尝试更新配置文件
+if model_name != "default":
+    print(f"正在尝试自动检测并配置模型: {model_name}")
+    updated = update_model_paths_in_config(config_path, model_name)
+    if updated:
+        print(f"成功更新模型配置，模型名称: '{model_name}'")
+    else:
+        print(f"未找到与模型名称 '{model_name}' 匹配的模型文件，将使用配置文件中的默认路径")
 
 # 解析数据库连接字符串
 def parse_db_url(db_url):
