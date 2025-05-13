@@ -494,8 +494,14 @@ class TTS:
             )
             self.configs.is_v3_synthesizer = True
             self.init_bigvgan()
-            if "pretrained" not in weights_path and hasattr(vits_model, "enc_q"):
+            
+        # 在任何模型版本中都检查并处理enc_q组件
+        if hasattr(vits_model, "enc_q") and not any(key.startswith("enc_q.") for key in dict_s2["weight"].keys()):
+            print(f"警告：权重文件中不存在enc_q相关参数，但模型结构需要它们。尝试删除enc_q组件。")
+            try:
                 del vits_model.enc_q
+            except Exception as e:
+                print(f"删除enc_q组件时出错: {e}")
 
         if if_lora_v3 == False:
             print(
